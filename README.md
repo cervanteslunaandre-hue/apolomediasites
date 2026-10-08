@@ -31,3 +31,9 @@ Desplegado en Vercel. Cada push a la rama conectada genera un nuevo deploy.
 
 Requiere el secreto `VERCEL_TOKEN` en *Settings → Secrets and variables → Actions* del repo.
 Crea el token en https://vercel.com/account/settings/tokens con alcance en el equipo "apolo media".
+
+## Auto-merge de ramas
+
+`.github/workflows/automerge.yml` fusiona automáticamente cualquier rama (push o PR) en la rama de
+producción y luego lanza el deploy. Las ramas de forks se ignoran. Si hay conflicto, el job falla y
+comenta en el PR para que se resuelva a mano.

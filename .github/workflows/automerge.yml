@@ -1,0 +1,88 @@
+# Fusiona automáticamente cualquier rama en la rama de producción.
+# - Push a una rama distinta de producción  -> se mezcla en producción y se publica.
+# - PR abierto/actualizado hacia producción -> se mezcla igual (GitHub lo marca como merged).
+# - Ramas de forks se ignoran por seguridad.
+# Si hay conflicto, el job falla y, si existe PR, deja un comentario.
+name: Auto-merge branches
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+# Un merge a la vez para evitar carreras al hacer push a producción.
+concurrency:
+  group: automerge
+  cancel-in-progress: false
+
+env:
+  PRODUCTION_BRANCH: claude/apollo-landing-page-ellde5
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  merge:
+    if: >-
+      (github.event_name == 'push' && github.ref_name != 'claude/apollo-landing-page-ellde5') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout producción
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCTION_BRANCH }}
+          fetch-depth: 0
+
+      - name: Rama a fusionar
+        id: src
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "branch=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fusionar y publicar
+        id: merge
+        run: |
+          set -e
+          BRANCH="${{ steps.src.outputs.branch }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$BRANCH"
+          if git merge-base --is-ancestor "origin/$BRANCH" HEAD; then
+            echo "La rama $BRANCH ya está incluida en $PRODUCTION_BRANCH. Nada que hacer."
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge --no-ff --no-edit -m "Auto-merge: $BRANCH -> $PRODUCTION_BRANCH" "origin/$BRANCH"; then
+            git push origin "HEAD:$PRODUCTION_BRANCH"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Conflicto al fusionar $BRANCH en $PRODUCTION_BRANCH. Resuélvelo manualmente."
+            exit 1
+          fi
+
+      - name: Comentar conflicto en el PR (si existe)
+        if: failure() && steps.merge.outputs.conflict == 'true'
+        run: |
+          BRANCH="${{ steps.src.outputs.branch }}"
+          NUM=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$NUM" ]; then
+            gh pr comment "$NUM" --repo "$GITHUB_REPOSITORY" --body "⚠️ No pude fusionar automáticamente la rama \`$BRANCH\` en \`$PRODUCTION_BRANCH\` por un conflicto. Resuélvelo y vuelve a hacer push."
+          fi
+
+      - name: Disparar deploy de producción
+        if: steps.merge.outputs.merged == 'true'
+        run: |
+          # Los pushes hechos con GITHUB_TOKEN no disparan otros workflows,
+          # así que lanzamos el deploy explícitamente.
+          gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref "$PRODUCTION_BRANCH" || \
+            echo "::warning::No se pudo lanzar deploy.yml (¿falta el secreto VERCEL_TOKEN?)."
