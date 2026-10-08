@@ -37,3 +37,5 @@ Crea el token en https://vercel.com/account/settings/tokens con alcance en el eq
 `.github/workflows/automerge.yml` fusiona automáticamente cualquier rama (push o PR) en la rama de
 producción y luego lanza el deploy. Las ramas de forks se ignoran. Si hay conflicto, el job falla y
 comenta en el PR para que se resuelva a mano.
+
+<!-- prueba de auto-merge -->
